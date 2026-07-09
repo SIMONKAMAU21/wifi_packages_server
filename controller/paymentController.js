@@ -5,6 +5,7 @@ import Voucher from "../models/Voucher.js";
 import Transaction from "../models/Transaction.js";
 import Subscription from "../models/Subscription.js";
 import User from "../models/User.js";
+import { createHotspotUser } from "../services/routeros.service.js"; // NEW
 
 dotenv.config();
 
@@ -42,7 +43,6 @@ export const processCheckout = async (req, res) => {
     let targetUser;
 
     if (!activeUserId) {
-      // Guest payment: Register/find a guest user based on phone or mac address
       const guestUsername = phone
         ? `guest_${phone}`
         : `mac_${macAddress.replace(/:/g, "")}`;
@@ -65,11 +65,9 @@ export const processCheckout = async (req, res) => {
       return res.status(404).json({ message: "User not found" });
     }
 
-    const userEmail = "simonkamau7466@gmail.com";
-    // email || targetUser.email || `${targetUser.username}@guest.local`;
+    // NOTE: this is hardcoded to your test email right now — see flag below
+    const userEmail = email || targetUser.email || "simonkamau7466@gmail.com";
 
-    // Reserve/claim a voucher up front so it's ready the moment payment verifies,
-    // but keep it "unused" until the webhook/verify step confirms payment success
     let voucher = await Voucher.findOne({
       packageId: pkg._id,
       status: "unused",
@@ -86,7 +84,6 @@ export const processCheckout = async (req, res) => {
 
     const txRef = generateTxRef("PSTK");
 
-    // Create a PENDING transaction record — completion happens only after Paystack verifies
     const transaction = await Transaction.create({
       userId: activeUserId,
       packageId: pkg._id,
@@ -98,7 +95,7 @@ export const processCheckout = async (req, res) => {
 
     const paystackData = {
       email: userEmail,
-      amount: Math.round(pkg.price * 100), // Paystack expects amount in kobo/cents
+      amount: Math.round(pkg.price * 100),
       currency: "KES",
       channels: ["mobile_money", "card"],
       reference: txRef,
@@ -126,27 +123,31 @@ export const processCheckout = async (req, res) => {
       },
     );
 
-    res.status(200).json({
+    console.log(
+      "authorization_url:",
+      paystackResponse.data.data.authorization_url,
+    );
+
+    return res.status(200).json({
       success: true,
       message: "Payment initialized. Redirect the user to complete payment.",
       authorization_url: paystackResponse.data.data.authorization_url,
       access_code: paystackResponse.data.data.access_code,
       reference: txRef,
     });
-    console.log("first", paystackResponse.data.data.authorization_url);
   } catch (error) {
     console.error(
       "Paystack checkout error:",
       error.response?.data || error.message,
     );
-    res.status(500).json({ message: "Checkout failed", error: error.message });
+    return res
+      .status(500)
+      .json({ message: "Checkout failed", error: error.message });
   }
 };
 
-// @desc    Verify a Paystack payment and activate the package (call this from client after redirect,
-//          or let the webhook handle it — both call the same shared logic below)
+// @desc    Verify a Paystack payment and activate the package
 // @route   GET /api/payments/verify/:reference
-// @access  Private (or Public for guest checkout)
 export const verifyPayment = async (req, res) => {
   try {
     const { reference } = req.params;
@@ -181,12 +182,10 @@ export const verifyPayment = async (req, res) => {
   }
 };
 
-// @desc    Paystack webhook — Paystack calls this automatically on charge.success
+// @desc    Paystack webhook
 // @route   POST /api/payments/webhook
-// @access  Public (secured via signature check)
 export const paystackWebhook = async (req, res) => {
   try {
-    // Verify the request genuinely came from Paystack
     const crypto = await import("crypto");
     const hash = crypto
       .createHmac("sha512", PAYSTACK_SECRET_KEY)
@@ -204,24 +203,21 @@ export const paystackWebhook = async (req, res) => {
       await completeSubscriptionFromReference(reference);
     }
 
-    // Always acknowledge receipt to Paystack quickly
     res.sendStatus(200);
   } catch (error) {
     console.error("Webhook processing error:", error.message);
-    res.sendStatus(200); // Still acknowledge to avoid repeated retries; log internally instead
+    res.sendStatus(200);
   }
 };
 
-// Shared logic: verifies a transaction with Paystack and activates the subscription.
-// Used by both the manual verify endpoint and the webhook, and is idempotent —
-// safe to call twice for the same reference (won't double-activate).
+// Shared logic: verifies with Paystack, activates the subscription, and now
+// also provisions the actual MikroTik hotspot user so the internet access works.
 const completeSubscriptionFromReference = async (reference) => {
   const transaction = await Transaction.findOne({ reference });
   if (!transaction) {
     return { success: false, message: "Transaction not found" };
   }
 
-  // Idempotency guard: if already completed, don't redo the work
   if (transaction.status === "completed") {
     const existingSubscription = await Subscription.findOne({
       transactionId: transaction._id,
@@ -270,17 +266,14 @@ const completeSubscriptionFromReference = async (reference) => {
     };
   }
 
-  // Mark transaction completed
   transaction.status = "completed";
   await transaction.save();
 
-  // Mark voucher as used
   voucher.status = "used";
   voucher.usedBy = userId;
   voucher.usedAt = new Date();
   await voucher.save();
 
-  // Deactivate any existing active subscriptions for this MAC address or User
   await Subscription.updateMany(
     {
       $or: [{ userId }, { macAddress: macAddress || "" }],
@@ -306,6 +299,25 @@ const completeSubscriptionFromReference = async (reference) => {
     transactionId: transaction._id,
   });
 
+  // NEW: provision the actual hotspot user on MikroTik so the credentials
+  // returned to the client will genuinely grant internet access.
+  try {
+    await createHotspotUser({
+      username: voucher.code,
+      password: voucher.code,
+      durationMinutes: pkg.durationMinutes,
+      bandwidthLimitMbps: pkg.bandwidthLimitMbps,
+      dataLimitMB: pkg.dataLimitMB,
+    });
+  } catch (routerError) {
+    console.error(
+      "Failed to create hotspot user on MikroTik:",
+      routerError.message,
+    );
+    // Payment succeeded and DB records exist — don't fail the response,
+    // but this needs monitoring/alerting since the user won't be able to connect.
+  }
+
   return {
     success: true,
     credentials: {
@@ -326,9 +338,8 @@ const completeSubscriptionFromReference = async (reference) => {
   };
 };
 
-// @desc    Redeem Voucher (activate a package via direct voucher input — unchanged, no payment involved)
+// @desc    Redeem Voucher (activate a package via direct voucher input — no payment involved)
 // @route   POST /api/payments/redeem-voucher
-// @access  Private (or Public for guest checkout)
 export const redeemVoucher = async (req, res) => {
   try {
     const { code, userId, macAddress, ipAddress } = req.body;
@@ -408,6 +419,23 @@ export const redeemVoucher = async (req, res) => {
     voucher.usedBy = activeUserId;
     voucher.usedAt = new Date();
     await voucher.save();
+
+    // NEW: provision the hotspot user here too, since redemption also
+    // grants access without going through Paystack.
+    try {
+      await createHotspotUser({
+        username: voucher.code,
+        password: voucher.code,
+        durationMinutes: pkg.durationMinutes,
+        bandwidthLimitMbps: pkg.bandwidthLimitMbps,
+        dataLimitMB: pkg.dataLimitMB,
+      });
+    } catch (routerError) {
+      console.error(
+        "Failed to create hotspot user on MikroTik:",
+        routerError.message,
+      );
+    }
 
     res.status(200).json({
       success: true,
