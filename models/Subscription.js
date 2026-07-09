@@ -47,10 +47,15 @@ const subscriptionSchema = new mongoose.Schema(
       ref: "Transaction",
       default: null,
     },
+    routerJobId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "RouterJob",
+      default: null,
+    },
   },
   {
     timestamps: true,
-  }
+  },
 );
 
 // Compound index to quickly find active subscriptions for a MAC address

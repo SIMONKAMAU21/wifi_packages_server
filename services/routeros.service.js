@@ -1,20 +1,4 @@
-import { RouterOSAPI } from "node-routeros";
-import dotenv from "dotenv";
-dotenv.config();
-
-const getConnection = async () => {
-  const conn = new RouterOSAPI({
-    host: process.env.ROUTEROS_HOST, // e.g. "192.168.88.1"
-    user: process.env.ROUTEROS_USER, // API-enabled admin user
-    password: process.env.ROUTEROS_PASSWORD,
-    port: process.env.ROUTEROS_API_PORT || 8728, // 8729 if using API-SSL
-    tls: {
-      rejectUnauthorized: false,
-    },
-  });
-  await conn.connect();
-  return conn;
-};
+import RouterJob from "../models/RouterJob.js";
 
 // Converts minutes -> "HH:MM:SS" format RouterOS expects for limit-uptime
 const formatUptime = (minutes) => {
@@ -25,6 +9,11 @@ const formatUptime = (minutes) => {
   return [h, m, s].map((n) => String(n).padStart(2, "0")).join(":");
 };
 
+// --- Same public API as before. Callers don't need to change. ---
+// Each function now just enqueues a RouterJob and returns it (includes _id
+// so callers can track provisioning status), instead of talking to the
+// router directly.
+
 export const createHotspotUser = async ({
   username,
   password,
@@ -33,65 +22,120 @@ export const createHotspotUser = async ({
   dataLimitMB,
   profileName = "default",
 }) => {
-  const conn = await getConnection();
-
-  try {
-    const params = [
-      `=name=${username}`,
-      `=password=${password}`,
-      `=profile=${profileName}`,
-      `=limit-uptime=${formatUptime(durationMinutes)}`,
-    ];
-
-    if (dataLimitMB && dataLimitMB > 0) {
-      // limit-bytes-total expects bytes
-      params.push(`=limit-bytes-total=${dataLimitMB * 1024 * 1024}`);
-    }
-
-    await conn.write("/ip/hotspot/user/add", params);
-
-    // Optional: per-user rate limit (upload/download), e.g. "2M/5M"
-    if (bandwidthLimitMbps && bandwidthLimitMbps > 0) {
-      await conn.write("/ip/hotspot/user/set", [
-        `=numbers=${username}`,
-        `=rate-limit=${bandwidthLimitMbps}M/${bandwidthLimitMbps}M`,
-      ]);
-    }
-  } finally {
-    conn.close();
-  }
+  const job = await RouterJob.create({
+    type: "create",
+    payload: {
+      username,
+      password,
+      durationMinutes,
+      bandwidthLimitMbps,
+      dataLimitMB,
+      profileName,
+    },
+  });
+  return job;
 };
 
 export const disableHotspotUser = async (username) => {
-  const conn = await getConnection();
-  try {
-    await conn.write("/ip/hotspot/user/set", [
-      `=numbers=${username}`,
-      `=disabled=yes`,
-    ]);
-
-    // Also kick them off if currently connected
-    const activeUsers = await conn.write("/ip/hotspot/active/print", [
-      `?user=${username}`,
-    ]);
-    for (const active of activeUsers) {
-      await conn.write("/ip/hotspot/active/remove", [`=.id=${active[".id"]}`]);
-    }
-  } finally {
-    conn.close();
-  }
+  const job = await RouterJob.create({
+    type: "disable",
+    payload: { username },
+  });
+  return job;
 };
 
 export const removeHotspotUser = async (username) => {
-  const conn = await getConnection();
-  try {
-    const users = await conn.write("/ip/hotspot/user/print", [
-      `?name=${username}`,
-    ]);
-    for (const user of users) {
-      await conn.write("/ip/hotspot/user/remove", [`=.id=${user[".id"]}`]);
+  const job = await RouterJob.create({
+    type: "remove",
+    payload: { username },
+  });
+  return job;
+};
+
+// --- Script generation, used only by the /api/router/pending route ---
+
+const buildScriptForJob = (job) => {
+  const lines = [];
+  const { type, payload } = job;
+
+  if (type === "create") {
+    const {
+      username,
+      password,
+      durationMinutes,
+      bandwidthLimitMbps,
+      dataLimitMB,
+      profileName,
+    } = payload;
+
+    const params = [
+      `name=${username}`,
+      `password=${password}`,
+      `profile=${profileName || "default"}`,
+      `limit-uptime=${formatUptime(durationMinutes)}`,
+    ];
+
+    if (dataLimitMB && dataLimitMB > 0) {
+      params.push(`limit-bytes-total=${dataLimitMB * 1024 * 1024}`);
     }
-  } finally {
-    conn.close();
+
+    lines.push(`/ip/hotspot/user/add ${params.join(" ")}`);
+
+    if (bandwidthLimitMbps && bandwidthLimitMbps > 0) {
+      lines.push(
+        `/ip/hotspot/user/set [find name="${username}"] rate-limit=${bandwidthLimitMbps}M/${bandwidthLimitMbps}M`,
+      );
+    }
   }
+
+  if (type === "disable") {
+    const { username } = payload;
+    lines.push(`/ip/hotspot/user/set [find name="${username}"] disabled=yes`);
+    lines.push(`/ip/hotspot/active/remove [find user="${username}"]`);
+  }
+
+  if (type === "remove") {
+    const { username } = payload;
+    lines.push(`/ip/hotspot/user/remove [find name="${username}"]`);
+  }
+
+  // Ack this job back to the server so it doesn't get re-delivered.
+  // Requires the router to have internet access to reach your API,
+  // which it does since it's the thing serving the hotspot.
+  lines.push(
+    `/tool fetch url="${process.env.BASE_URL}/api/router/ack/${job._id}" http-method=post keep-result=no`,
+  );
+
+  return lines.join("\n");
+};
+
+// Pulls all pending jobs, marks them delivered, returns one combined script
+export const getPendingScript = async () => {
+  const jobs = await RouterJob.find({ status: "pending" }).sort({
+    createdAt: 1,
+  });
+
+  if (jobs.length === 0) {
+    return "# no pending jobs";
+  }
+
+  const scripts = jobs.map(buildScriptForJob);
+
+  await RouterJob.updateMany(
+    { _id: { $in: jobs.map((j) => j._id) } },
+    { status: "delivered", deliveredAt: new Date() },
+  );
+
+  return scripts.join("\n\n");
+};
+
+export const ackJob = async (jobId, { success = true, error = null } = {}) => {
+  const job = await RouterJob.findById(jobId);
+  if (!job) return null;
+
+  job.status = success ? "completed" : "failed";
+  job.completedAt = new Date();
+  if (error) job.error = error;
+  await job.save();
+  return job;
 };

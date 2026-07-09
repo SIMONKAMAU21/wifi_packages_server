@@ -301,23 +301,24 @@ const completeSubscriptionFromReference = async (reference) => {
 
   // NEW: provision the actual hotspot user on MikroTik so the credentials
   // returned to the client will genuinely grant internet access.
+  let provisioning = { status: "pending", jobId: null };
   try {
-    await createHotspotUser({
+    const job = await createHotspotUser({
       username: voucher.code,
       password: voucher.code,
       durationMinutes: pkg.durationMinutes,
       bandwidthLimitMbps: pkg.bandwidthLimitMbps,
       dataLimitMB: pkg.dataLimitMB,
     });
+    subscription.routerJobId = job._id;
+    await subscription.save();
+    provisioning = { status: job.status, jobId: job._id };
   } catch (routerError) {
     console.error(
-      "Failed to create hotspot user on MikroTik:",
+      "Failed to queue hotspot job for MikroTik:",
       routerError.message,
     );
-    // Payment succeeded and DB records exist — don't fail the response,
-    // but this needs monitoring/alerting since the user won't be able to connect.
   }
-
   return {
     success: true,
     credentials: {
@@ -335,6 +336,7 @@ const completeSubscriptionFromReference = async (reference) => {
       reference: transaction.reference,
       amount: transaction.amount,
     },
+    provisioning,
   };
 };
 
@@ -422,17 +424,21 @@ export const redeemVoucher = async (req, res) => {
 
     // NEW: provision the hotspot user here too, since redemption also
     // grants access without going through Paystack.
+    let provisioning = { status: "pending", jobId: null };
     try {
-      await createHotspotUser({
+      const job = await createHotspotUser({
         username: voucher.code,
         password: voucher.code,
         durationMinutes: pkg.durationMinutes,
         bandwidthLimitMbps: pkg.bandwidthLimitMbps,
         dataLimitMB: pkg.dataLimitMB,
       });
+      subscription.routerJobId = job._id;
+      await subscription.save();
+      provisioning = { status: job.status, jobId: job._id };
     } catch (routerError) {
       console.error(
-        "Failed to create hotspot user on MikroTik:",
+        "Failed to queue hotspot job for MikroTik:",
         routerError.message,
       );
     }
@@ -451,6 +457,7 @@ export const redeemVoucher = async (req, res) => {
         endTime,
         durationMinutes: pkg.durationMinutes,
       },
+      provisioning,
     });
   } catch (error) {
     res

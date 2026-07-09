@@ -9,6 +9,7 @@ import voucherRouter from "./routers/voucherRoutes.js";
 import paymentRouter from "./routers/paymentRoutes.js";
 import subscriptionRouter from "./routers/subscriptionRoutes.js";
 import adminRouter from "./routers/adminRoutes.js";
+import routerRoutes from "./routers/routersRoutes.js";
 
 import User from "./models/User.js";
 import bcrypt from "bcryptjs";
@@ -28,7 +29,9 @@ const seedAdmin = async () => {
         phone: "0700000000",
         email: "admin@wifi.com",
       });
-      console.warn("🚀 Seeded default admin user: Username 'admin' and Password 'admin123'");
+      console.warn(
+        "🚀 Seeded default admin user: Username 'admin' and Password 'admin123'",
+      );
     } else {
       console.log("Database already has admin user.");
     }
@@ -44,11 +47,13 @@ connectDb()
 const app = express();
 
 // Configure CORS to allow access from any client domain (important for hotspot devices)
-app.use(cors({
-  origin: "*",
-  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"]
-}));
+app.use(
+  cors({
+    origin: "*",
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  }),
+);
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -65,6 +70,7 @@ app.use("/api/vouchers", voucherRouter);
 app.use("/api/payments", paymentRouter);
 app.use("/api/subscriptions", subscriptionRouter);
 app.use("/api/admin", adminRouter);
+app.use("/api/router", routerRoutes);
 
 // Server configuration
 const PORT = process.env.PORT || 5000;
