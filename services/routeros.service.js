@@ -69,10 +69,10 @@ const buildScriptForJob = (job) => {
     } = payload;
 
     const params = [
-      `name=${username}`,
-      `password=${password}`,
-      `profile=${profileName || "default"}`,
-      `limit-uptime=${formatUptime(durationMinutes)}`,
+      `name="${username}"`,
+      `password="${password}"`,
+      `profile="${profileName || "default"}"`,
+      `limit-uptime="${formatUptime(durationMinutes)}"`,
     ];
 
     if (dataLimitMB && dataLimitMB > 0) {
@@ -80,7 +80,7 @@ const buildScriptForJob = (job) => {
     }
 
     if (bandwidthLimitMbps && bandwidthLimitMbps > 0) {
-      params.push(`rate-limit=${bandwidthLimitMbps}M/${bandwidthLimitMbps}M`);
+      params.push(`rate-limit="${bandwidthLimitMbps}M/${bandwidthLimitMbps}M"`);
     }
 
     lines.push(`/ip hotspot user add ${params.join(" ")}`);
@@ -88,14 +88,13 @@ const buildScriptForJob = (job) => {
 
   if (type === "disable") {
     const { username } = payload;
-    // numbers= accepts the item's own name directly, no [find] needed
-    lines.push(`/ip hotspot user set numbers=${username} disabled=yes`);
+    lines.push(`/ip hotspot user set numbers="${username}" disabled=yes`);
     lines.push(`/ip hotspot active remove [find user="${username}"]`);
   }
 
   if (type === "remove") {
     const { username } = payload;
-    lines.push(`/ip hotspot user remove numbers=${username}`);
+    lines.push(`/ip hotspot user remove numbers="${username}"`);
   }
 
   lines.push(
