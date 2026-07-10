@@ -59,14 +59,8 @@ const buildScriptForJob = (job) => {
   const { type, payload } = job;
 
   if (type === "create") {
-    const {
-      username,
-      password,
-      durationMinutes,
-      bandwidthLimitMbps,
-      dataLimitMB,
-      profileName,
-    } = payload;
+    const { username, password, durationMinutes, dataLimitMB, profileName } =
+      payload;
 
     const params = [
       `name="${username}"`,
@@ -77,10 +71,6 @@ const buildScriptForJob = (job) => {
 
     if (dataLimitMB && dataLimitMB > 0) {
       params.push(`limit-bytes-total=${dataLimitMB * 1024 * 1024}`);
-    }
-
-    if (bandwidthLimitMbps && bandwidthLimitMbps > 0) {
-      params.push(`rate-limit="${bandwidthLimitMbps}M/${bandwidthLimitMbps}M"`);
     }
 
     lines.push(`/ip hotspot user add ${params.join(" ")}`);
