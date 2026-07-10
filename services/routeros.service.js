@@ -79,24 +79,24 @@ const buildScriptForJob = (job) => {
       params.push(`limit-bytes-total=${dataLimitMB * 1024 * 1024}`);
     }
 
-    lines.push(`/ip/hotspot/user/add ${params.join(" ")}`);
+    lines.push(`/ip hotspot user add ${params.join(" ")}`);
 
     if (bandwidthLimitMbps && bandwidthLimitMbps > 0) {
       lines.push(
-        `/ip/hotspot/user/set [find name="${username}"] rate-limit=${bandwidthLimitMbps}M/${bandwidthLimitMbps}M`,
+        `/ip hotspot user set [find name="${username}"] rate-limit=${bandwidthLimitMbps}M/${bandwidthLimitMbps}M`,
       );
     }
   }
 
   if (type === "disable") {
     const { username } = payload;
-    lines.push(`/ip/hotspot/user/set [find name="${username}"] disabled=yes`);
-    lines.push(`/ip/hotspot/active/remove [find user="${username}"]`);
+    lines.push(`/ip hotspot user set [find name="${username}"] disabled=yes`);
+    lines.push(`/ip hotspot active remove [find user="${username}"]`);
   }
 
   if (type === "remove") {
     const { username } = payload;
-    lines.push(`/ip/hotspot/user/remove [find name="${username}"]`);
+    lines.push(`/ip hotspot user remove [find name="${username}"]`);
   }
 
   // Ack this job back to the server so it doesn't get re-delivered.

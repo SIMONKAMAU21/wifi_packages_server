@@ -1,1 +1,14 @@
-POST http://localhost:5000/api/auth/register;
+POST http://localhost:5000/api/auth/register
+application/json
+Authorization: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI2OTExOWEwOGNiZjQzZDk2OWJjMzU5ZTUiLCJpYXQiOjE3NTQxMjMzNDcsImV4cCI6MTc1NDEyNzM0N30.9hNmyT0c5Gv5x1X7N9jX-f6c9J7z2e2u3L2a1Q9X0Y8
+
+ {
+        "username": "testuser1",
+        "phone": "0712345678",
+        "email": "[EMAIL_ADDRESS]",
+        "password": "password123",
+        "role": "user",
+        "macAddress": "00:1A:2B:3C:4D:5E",
+        "ipAddress": "[IP_ADDRESS]"
+    }
+
