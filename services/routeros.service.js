@@ -79,29 +79,25 @@ const buildScriptForJob = (job) => {
       params.push(`limit-bytes-total=${dataLimitMB * 1024 * 1024}`);
     }
 
-    lines.push(`/ip hotspot user add ${params.join(" ")}`);
-
     if (bandwidthLimitMbps && bandwidthLimitMbps > 0) {
-      lines.push(
-        `/ip hotspot user set [find name="${username}"] rate-limit=${bandwidthLimitMbps}M/${bandwidthLimitMbps}M`,
-      );
+      params.push(`rate-limit=${bandwidthLimitMbps}M/${bandwidthLimitMbps}M`);
     }
+
+    lines.push(`/ip hotspot user add ${params.join(" ")}`);
   }
 
   if (type === "disable") {
     const { username } = payload;
-    lines.push(`/ip hotspot user set [find name="${username}"] disabled=yes`);
+    // numbers= accepts the item's own name directly, no [find] needed
+    lines.push(`/ip hotspot user set numbers=${username} disabled=yes`);
     lines.push(`/ip hotspot active remove [find user="${username}"]`);
   }
 
   if (type === "remove") {
     const { username } = payload;
-    lines.push(`/ip hotspot user remove [find name="${username}"]`);
+    lines.push(`/ip hotspot user remove numbers=${username}`);
   }
 
-  // Ack this job back to the server so it doesn't get re-delivered.
-  // Requires the router to have internet access to reach your API,
-  // which it does since it's the thing serving the hotspot.
   lines.push(
     `/tool fetch url="${process.env.BASE_URL}/api/router/ack/${job._id}" http-method=post keep-result=no`,
   );
